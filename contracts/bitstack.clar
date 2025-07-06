@@ -135,3 +135,50 @@
     (ok true)
   )
 )
+
+;; REWARD CALCULATION ENGINE
+
+(define-read-only (calculate-rewards (staker principal))
+  (match (map-get? stakes { staker: staker })
+    stake-info (let (
+        (stake-amount (get amount stake-info))
+        (stake-duration (- stacks-block-height (get staked-at stake-info)))
+        (reward-basis (/ (* stake-amount (var-get reward-rate)) u1000))
+        (blocks-per-year u52560) ;; ~365 days on Stacks
+        (time-factor (/ (* stake-duration u10000) blocks-per-year))
+        (reward (* reward-basis (/ time-factor u10000)))
+      )
+      reward
+    )
+    u0
+  )
+)
+
+;; REWARD DISTRIBUTION FUNCTIONS
+
+(define-public (claim-rewards)
+  (let (
+      (stake-info (unwrap! (map-get? stakes { staker: tx-sender }) ERR_NO_STAKE_FOUND))
+      (reward-amount (calculate-rewards tx-sender))
+    )
+    (asserts! (> reward-amount u0) ERR_NO_STAKE_FOUND)
+    (asserts! (<= reward-amount (var-get reward-pool)) ERR_NOT_ENOUGH_REWARDS)
+    ;; Update rewards pool
+    (var-set reward-pool (- (var-get reward-pool) reward-amount))
+    ;; Update rewards claimed
+    (match (map-get? rewards-claimed { staker: tx-sender })
+      prev-claimed (map-set rewards-claimed { staker: tx-sender } { amount: (+ reward-amount (get amount prev-claimed)) })
+      (map-set rewards-claimed { staker: tx-sender } { amount: reward-amount })
+    )
+    ;; Reset stake time to current block to restart reward calculation
+    (map-set stakes { staker: tx-sender } {
+      amount: (get amount stake-info),
+      staked-at: stacks-block-height,
+    })
+    ;; Transfer rewards to the staker
+    (as-contract (try! (contract-call? 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token
+      transfer reward-amount (as-contract tx-sender) tx-sender none
+    )))
+    (ok true)
+  )
+)
