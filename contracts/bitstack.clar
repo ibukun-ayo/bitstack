@@ -182,3 +182,73 @@
     (ok true)
   )
 )
+
+;; UNSTAKING FUNCTIONS
+
+(define-public (unstake (amount uint))
+  (let (
+      (stake-info (unwrap! (map-get? stakes { staker: tx-sender }) ERR_NO_STAKE_FOUND))
+      (staked-amount (get amount stake-info))
+      (staked-at (get staked-at stake-info))
+      (stake-duration (- stacks-block-height staked-at))
+    )
+    ;; Validate unstaking conditions
+    (asserts! (> amount u0) ERR_ZERO_STAKE)
+    (asserts! (>= staked-amount amount) ERR_NO_STAKE_FOUND)
+    (asserts! (>= stake-duration (var-get min-stake-period))
+      ERR_TOO_EARLY_TO_UNSTAKE
+    )
+    ;; Claim rewards first if available
+    (try! (claim-rewards))
+    ;; Update stake record
+    (if (> staked-amount amount)
+      (map-set stakes { staker: tx-sender } {
+        amount: (- staked-amount amount),
+        staked-at: stacks-block-height,
+      })
+      (map-delete stakes { staker: tx-sender })
+    )
+    ;; Update total staked
+    (var-set total-staked (- (var-get total-staked) amount))
+    ;; Transfer tokens back to the staker
+    (as-contract (try! (contract-call? 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token
+      transfer amount (as-contract tx-sender) tx-sender none
+    )))
+    (ok true)
+  )
+)
+
+;; READ-ONLY INTERFACE FUNCTIONS
+
+(define-read-only (get-stake-info (staker principal))
+  (map-get? stakes { staker: staker })
+)
+
+(define-read-only (get-rewards-claimed (staker principal))
+  (map-get? rewards-claimed { staker: staker })
+)
+
+(define-read-only (get-reward-rate)
+  (var-get reward-rate)
+)
+
+(define-read-only (get-min-stake-period)
+  (var-get min-stake-period)
+)
+
+(define-read-only (get-reward-pool)
+  (var-get reward-pool)
+)
+
+(define-read-only (get-total-staked)
+  (var-get total-staked)
+)
+
+;; ANALYTICS AND METRICS
+
+(define-read-only (get-current-apy)
+  (let ((rate-basis (var-get reward-rate)))
+    (* rate-basis u100)
+    ;; Convert basis points to percentage (e.g., 5 basis points = 0.5%)
+  )
+)
